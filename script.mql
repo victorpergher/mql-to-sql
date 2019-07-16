@@ -1,0 +1,118 @@
+#include "MQLMySQL.mqh"
+MqlDateTime  currentTimeServer;
+datetime     time;          // Hora da última atualização de preços
+double       bid;           // Preço corrente de venda
+double       ask;           // Preço corrente de compra
+double       last;          // Preço da última operação (preço último)
+double       tmp_last;      // Preço da última operação (para garantir que o valor não será perdido no onBookEvent)
+
+ulong        volume;        // Volume para o preço último corrente
+long         time_msc;      // Tempo do "Last" preço atualizado em  milissegundos
+uint         flags;         // Flags de tick
+double       tick_last_prev;// Diferença de preço entra o ultimo e o tick atual
+int DB; // database identifier
+string table_name;
+
+int OnInit() {
+   printf("begin!");
+   TimeTradeServer(currentTimeServer);
+   table_name = _Symbol; // + string(currentTimeServer.year) + string(currentTimeServer.mon) + string(currentTimeServer.day);
+   string Host = "172.16.0.139";
+   string User = "mql";
+   string Password = "password";
+   string Database = "mql";
+   string Socket = ""; // database credentials
+   int Port = 3306;
+   int ClientFlag = 0;
+   string cmd = "";
+   tmp_last = 0;
+   int i;
+   for (i=0; i < 32; i++) {
+    // !exclude type! cmd = cmd + " book_" + i + "_price DECIMAL(5,2), book_" + i + "_volume INT(8), book_" + i + "_type int(1) ,";
+    cmd = cmd + " book_" + i + "_price DECIMAL(5,2), book_" + i + "_volume INT(8), ";
+   }
+
+   string sql = "CREATE TABLE IF NOT EXISTS " + table_name + " ( " +
+   " id int NOT NULL AUTO_INCREMENT, "
+   " tick_time DATETIME(6), " +
+   " tick_bid DECIMAL(5,2), " +        // Preço corrente de venda
+   " tick_ask DECIMAL(5,2), " +        // Preço corrente de compra
+   " tick_last DECIMAL(5,2), " +       // Preço da última operação (preço último)
+   " tick_volume INT(8), " +           // Volume para o preço último corrente
+   " tick_time_msc INT(8), " +         // Tempo do "Last" preço atualizado em  milissegundos
+   " tick_flags INT(3), " +            // Flags de tick
+   " tick_last_prev DECIMAL(5,2), " +  // Preço do tick anterior ao atual
+   cmd +
+   " PRIMARY KEY (ID) " +
+   ") ENGINE = MYISAM; ";
+   printf(sql);
+
+   DB = MySqlConnect(Host, User, Password, Database, Port, Socket, ClientFlag);
+   printf(DB);
+   if (DB != -1) {
+    Print ("Connected! DBID#", DB);
+    printf(sql);
+    MySqlExecute(DB, sql);
+    printf(MySqlErrorDescription);
+   }
+   Print (MySqlVersion());
+   MarketBookAdd(_Symbol);
+   printf("FIM do OnInit()");
+   return(INIT_SUCCEEDED);
+}
+
+void OnDeinit(const int reason) {
+   MarketBookRelease(_Symbol);
+}
+
+void OnTick() {
+   MqlTick last_tick;
+   if(SymbolInfoTick(Symbol(), last_tick)) {
+      time = last_tick.time;
+      bid = last_tick.bid;
+      ask = last_tick.ask;
+      volume = last_tick.volume;
+      time_msc = last_tick.time_msc;
+      flags = last_tick.flags;
+      last = last_tick.last;
+      tick_last_prev = tmp_last;
+      tmp_last = last_tick.last;
+      printf("iVolume:" +  iVolume(Symbol(), PERIOD_CURRENT, 0));
+   }
+}
+
+void OnBookEvent(const string &symbol) {
+  MqlBookInfo book[];
+  MarketBookGet(symbol, book);
+  int sizeBook = ArraySize(book);
+  TimeTradeServer(currentTimeServer);
+  int i;
+  int c;
+  c = 0;
+
+  string cmd = " INSERT INTO " + table_name + " SET "
+  //" tick_time = " + time + ", " +
+  " tick_time = NOW(), " +
+  " tick_bid = " + bid + ", " +           // Preço corrente de venda
+  " tick_ask = " + ask + ", " +           // Preço corrente de compra
+  " tick_last = " + last + ", " +         // Preço da última operação (preço último)
+  " tick_volume = " + volume + ", " +     // Volume para o preço último corrente
+  " tick_time_msc = " + time_msc + ", " + // Tempo do "Last" preço atualizado em  milissegundos
+  " tick_flags = " + flags + ", " +       // Flags de tick
+  " tick_last_prev = " + tick_last_prev;  // Preço do tick anterior ao atual
+  bid = 0;
+  ask = 0;
+  last = 0;
+  volume = 0;
+  time_msc = 0;
+  flags = 0;
+  tick_last_prev = 0;
+  for (i=0; i < 32; i++) {
+    cmd = cmd +
+    ", book_" + i + "_price = " + book[i].price + ", " +
+    " book_" + i + "_volume = " + book[i].volume;
+    // !exclude type! " book_" + i + "_type = " + book[i].type;
+  }
+  //printf(cmd);
+  MySqlExecute(DB, cmd);
+}
